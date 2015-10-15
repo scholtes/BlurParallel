@@ -102,6 +102,10 @@
 
 #include "utils.h"
 
+// Height AND width of a block
+// So BLOCK_WIDTH * BLOCK_WIDTH = threads per block
+#define BLOCK_WIDTH 32
+
 __global__
 void gaussian_blur(const unsigned char* const inputChannel,
                    unsigned char* const outputChannel,
@@ -141,7 +145,22 @@ void separateChannels(const uchar4* const inputImageRGBA,
                       unsigned char* const greenChannel,
                       unsigned char* const blueChannel)
 {
-  // TODO
+  // Stolen from recombineChannel kernel code
+  const int2 thread_2D_pos = make_int2( blockIdx.x * blockDim.x + threadIdx.x,
+                                        blockIdx.y * blockDim.y + threadIdx.y);
+
+  const int thread_1D_pos = thread_2D_pos.y * numCols + thread_2D_pos.x;
+
+  //make sure we don't try and access memory outside the image
+  //by having any threads mapped there return early
+  if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
+    return;
+
+  uchar4 rgba = inputImageRGBA[thread_1D_pos];
+  redChannel[thread_1D_pos] = rgba.x;
+  greenChannel[thread_1D_pos] = rgba.y;
+  blueChannel[thread_1D_pos] = rgba.z;
+  // ~~TODO~~
   //
   // NOTE: Be careful not to try to access memory that is outside the bounds of
   // the image. You'll want code that performs the following check before accessing
@@ -220,15 +239,25 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
                         unsigned char *d_blueBlurred,
                         const int filterWidth)
 {
-  //TODO: Set reasonable block size (i.e., number of threads per block)
-  const dim3 blockSize;
+  //~~TODO~~: Set reasonable block size (i.e., number of threads per block)
+  const dim3 blockSize(BLOCK_WIDTH, BLOCK_WIDTH);
 
-  //TODO:
+  //~~TODO~~:
   //Compute correct grid size (i.e., number of blocks per kernel launch)
   //from the image size and and block size.
-  const dim3 gridSize;
+  size_t numPixels = numRows * numCols;
+  size_t numBlocksPerGridRow = 1 + ((numCols - 1) / BLOCK_WIDTH);
+  size_t numBlocksPerGridCol = 1 + ((numRows - 1) / BLOCK_WIDTH);
+  const dim3 gridSize(numBlocksPerGridRow, numBlocksPerGridCol);
 
-  //TODO: Launch a kernel for separating the RGBA image into different color channels
+  //~~TODO~~: Launch a kernel for separating the RGBA image into different color channels
+  separateChannels<<<gridSize, blockSize>>>(
+      d_inputImageRGBA,
+      numRows, numCols,
+      d_redBlurred,
+      d_greenBlurred,
+      d_blueBlurred
+  );
 
   // Call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
   // launching your kernel to make sure that you didn't make any mistakes.
