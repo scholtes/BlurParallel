@@ -112,6 +112,40 @@ void gaussian_blur(const unsigned char* const inputChannel,
                    int numRows, int numCols,
                    const float* const filter, const int filterWidth)
 {
+  // Stolen from recombineChannel kernel
+  const int2 thread_2D_pos = make_int2( blockIdx.x * blockDim.x + threadIdx.x,
+                                        blockIdx.y * blockDim.y + threadIdx.y);
+
+  const int index = thread_2D_pos.y * numCols + thread_2D_pos.x;
+
+  if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
+    return;
+
+  ///// NAIVE SECTION //////
+  // This section does things without any consideration of time spent on memory.
+  // My benchmarks show ~1.68 milliseconds
+  int r = thread_2D_pos.y;
+  int c = thread_2D_pos.x;
+
+  float result = 0.f;
+  //For every value in the filter around the pixel (c, r)
+  for (int filter_r = -filterWidth/2; filter_r <= filterWidth/2; ++filter_r) {
+    for (int filter_c = -filterWidth/2; filter_c <= filterWidth/2; ++filter_c) {
+      //Find the global image position for this filter position
+      //clamp to boundary of the image
+      int image_r = min(max(r + filter_r, 0), static_cast<int>(numRows - 1));
+      int image_c = min(max(c + filter_c, 0), static_cast<int>(numCols - 1));
+
+      float image_value = static_cast<float>(inputChannel[image_r * numCols + image_c]);
+      float filter_value = filter[(filter_r + filterWidth/2) * filterWidth + filter_c + filterWidth/2];
+
+      result += image_value * filter_value;
+    }
+  }
+
+  outputChannel[r * numCols + c] = result;
+  /////  END NAIVE SECTION //////
+
   // TODO
   
   // NOTE: Be sure to compute any intermediate results in floating point
@@ -217,18 +251,25 @@ void allocateMemoryAndCopyToGPU(const size_t numRowsImage, const size_t numColsI
   checkCudaErrors(cudaMalloc(&d_green, sizeof(unsigned char) * numRowsImage * numColsImage));
   checkCudaErrors(cudaMalloc(&d_blue,  sizeof(unsigned char) * numRowsImage * numColsImage));
 
-  //TODO:
+  //~~TODO~~:
   //Allocate memory for the filter on the GPU
   //Use the pointer d_filter that we have already declared for you
   //You need to allocate memory for the filter with cudaMalloc
   //be sure to use checkCudaErrors like the above examples to
   //be able to tell if anything goes wrong
   //IMPORTANT: Notice that we pass a pointer to a pointer to cudaMalloc
+  checkCudaErrors(cudaMalloc(&d_filter, sizeof(float) * filterWidth * filterWidth));
 
-  //TODO:
+  //~~TODO~~:
   //Copy the filter on the host (h_filter) to the memory you just allocated
   //on the GPU.  cudaMemcpy(dst, src, numBytes, cudaMemcpyHostToDevice);
   //Remember to use checkCudaErrors!
+  checkCudaErrors(cudaMemcpy(
+      d_filter,
+      h_filter,
+      sizeof(float) * filterWidth * filterWidth,
+      cudaMemcpyHostToDevice
+  ));
 
 }
 
@@ -254,16 +295,38 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
   separateChannels<<<gridSize, blockSize>>>(
       d_inputImageRGBA,
       numRows, numCols,
-      d_redBlurred,
-      d_greenBlurred,
-      d_blueBlurred
+      d_red,
+      d_green,
+      d_blue
   );
 
   // Call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
   // launching your kernel to make sure that you didn't make any mistakes.
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-  //TODO: Call your convolution kernel here 3 times, once for each color channel.
+  //~~TODO~~: Call your convolution kernel here 3 times, once for each color channel.
+  gaussian_blur<<<gridSize, blockSize>>>(
+      d_red,
+      d_redBlurred,
+      numRows, numCols,
+      d_filter,
+      filterWidth
+  );
+  gaussian_blur<<<gridSize, blockSize>>>(
+      d_green,
+      d_greenBlurred,
+      numRows, numCols,
+      d_filter,
+      filterWidth
+  );
+  gaussian_blur<<<gridSize, blockSize>>>(
+      d_blue,
+      d_blueBlurred,
+      numRows, numCols,
+      d_filter,
+      filterWidth
+  );
+
 
   // Again, call cudaDeviceSynchronize(), then call checkCudaErrors() immediately after
   // launching your kernel to make sure that you didn't make any mistakes.
@@ -290,4 +353,5 @@ void cleanup() {
   checkCudaErrors(cudaFree(d_red));
   checkCudaErrors(cudaFree(d_green));
   checkCudaErrors(cudaFree(d_blue));
+  checkCudaErrors(cudaFree(d_filter));
 }
