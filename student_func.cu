@@ -113,15 +113,64 @@ void gaussian_blur(const unsigned char* const inputChannel,
                    const float* const filter, const int filterWidth)
 {
   // Stolen from recombineChannel kernel
-  const int2 thread_2D_pos = make_int2( blockIdx.x * blockDim.x + threadIdx.x,
-                                        blockIdx.y * blockDim.y + threadIdx.y);
+  const int2 thread_2D_pos = make_int2( blockIdx.x * BLOCK_WIDTH + threadIdx.x,
+                                        blockIdx.y * BLOCK_WIDTH + threadIdx.y);
 
   const int index = thread_2D_pos.y * numCols + thread_2D_pos.x;
+
+  const int margin = filterWidth/2;
 
   if (thread_2D_pos.x >= numCols || thread_2D_pos.y >= numRows)
     return;
 
-  ///// NAIVE SECTION //////
+  ////// SMART SECTION //////
+  extern __shared__ unsigned char neighborhood[];
+  if(threadIdx.x == 0 && threadIdx.y == 0) {
+    const int2 anchor = make_int2( blockIdx.x * BLOCK_WIDTH,
+                                   blockIdx.y * BLOCK_WIDTH);
+    ///////
+    for(int abc=0; abc < (BLOCK_WIDTH + filterWidth-1)*(BLOCK_WIDTH + filterWidth -1); abc++) {
+      neighborhood[abc] = 0;
+    }
+    ///////
+    for(int r = anchor.y - margin; r < anchor.y + BLOCK_WIDTH + margin; r++) {
+      for(int c = anchor.x - margin; c < anchor.x + BLOCK_WIDTH + margin; c++) {
+        int image_r = min(max(r, 0), static_cast<int>(numRows -1));
+        int image_c = min(max(c, 0), static_cast<int>(numCols -1));
+        //////////
+        //int image_r = r;
+        //int image_c = c;
+        //if(image_r < 0) { image_r = 0;}
+        //if(image_c < 0) { image_c = 0;}
+        //if(image_r >= numRows) { image_r = numRows -1;}
+        //if(image_c >= numCols) { image_c = numCols -1;}
+        //////////
+        int image_idx = image_r*numCols + image_c;
+        int neighborhood_idx = (r-anchor.y+margin)*(BLOCK_WIDTH+filterWidth-1) + (c-anchor.x+margin);
+        neighborhood[neighborhood_idx] = inputChannel[image_idx];
+      }
+    }
+  }
+  // Must wait for shared memory to be instantiated
+  __syncthreads();
+
+  //const int neigh_index = (threadIdx.y+margin)*(BLOCK_WIDTH+filterWidth-1) + threadIdx.x + margin;
+  //outputChannel[index] = neighborhood[neigh_index];
+  float result = 0.0;
+  for(int r = -margin; r <= margin; r++) {
+    for(int c = -margin; c <= margin; c++) {
+      const int neigh_index = (threadIdx.y+margin-r)*(BLOCK_WIDTH+filterWidth-1)+threadIdx.x+margin+c;
+      const int filter_index = (r+margin)*filterWidth + c+margin;
+      result += filter[filter_index] * neighborhood[neigh_index];
+    }
+  }
+  outputChannel[index] = result;
+
+
+
+  ////// END SMART SECTION //////
+
+  /*//// NAIVE SECTION //////
   // This section does things without any consideration of time spent on memory.
   // My benchmarks show ~1.68 milliseconds
   int r = thread_2D_pos.y;
@@ -144,7 +193,7 @@ void gaussian_blur(const unsigned char* const inputChannel,
   }
 
   outputChannel[r * numCols + c] = result;
-  /////  END NAIVE SECTION //////
+  /////  END NAIVE SECTION /////*/
 
   // TODO
   
@@ -180,8 +229,8 @@ void separateChannels(const uchar4* const inputImageRGBA,
                       unsigned char* const blueChannel)
 {
   // Stolen from recombineChannel kernel code
-  const int2 thread_2D_pos = make_int2( blockIdx.x * blockDim.x + threadIdx.x,
-                                        blockIdx.y * blockDim.y + threadIdx.y);
+  const int2 thread_2D_pos = make_int2( blockIdx.x * BLOCK_WIDTH + threadIdx.x,
+                                        blockIdx.y * BLOCK_WIDTH + threadIdx.y);
 
   const int thread_1D_pos = thread_2D_pos.y * numCols + thread_2D_pos.x;
 
@@ -218,8 +267,8 @@ void recombineChannels(const unsigned char* const redChannel,
                        int numRows,
                        int numCols)
 {
-  const int2 thread_2D_pos = make_int2( blockIdx.x * blockDim.x + threadIdx.x,
-                                        blockIdx.y * blockDim.y + threadIdx.y);
+  const int2 thread_2D_pos = make_int2( blockIdx.x * BLOCK_WIDTH + threadIdx.x,
+                                        blockIdx.y * BLOCK_WIDTH + threadIdx.y);
 
   const int thread_1D_pos = thread_2D_pos.y * numCols + thread_2D_pos.x;
 
@@ -305,21 +354,24 @@ void your_gaussian_blur(const uchar4 * const h_inputImageRGBA, uchar4 * const d_
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
   //~~TODO~~: Call your convolution kernel here 3 times, once for each color channel.
-  gaussian_blur<<<gridSize, blockSize>>>(
+  size_t sharedMemSize = sizeof(unsigned char)
+      * (BLOCK_WIDTH + filterWidth - 1)
+      * (BLOCK_WIDTH + filterWidth -1);
+  gaussian_blur<<<gridSize, blockSize, sharedMemSize>>>(
       d_red,
       d_redBlurred,
       numRows, numCols,
       d_filter,
       filterWidth
   );
-  gaussian_blur<<<gridSize, blockSize>>>(
+  gaussian_blur<<<gridSize, blockSize, sharedMemSize>>>(
       d_green,
       d_greenBlurred,
       numRows, numCols,
       d_filter,
       filterWidth
   );
-  gaussian_blur<<<gridSize, blockSize>>>(
+  gaussian_blur<<<gridSize, blockSize, sharedMemSize>>>(
       d_blue,
       d_blueBlurred,
       numRows, numCols,
