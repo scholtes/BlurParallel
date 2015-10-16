@@ -131,15 +131,19 @@ void gaussian_blur(const unsigned char* const inputChannel,
 
   float result = 0.f;
   //For every value in the filter around the pixel (c, r)
+  int image_r;
+  int image_c;
+  float image_value;
+  float filter_value;
   for (int filter_r = -filterWidth/2; filter_r <= filterWidth/2; ++filter_r) {
+    image_r = min(max(r + filter_r, 0), static_cast<int>(numRows - 1));
     for (int filter_c = -filterWidth/2; filter_c <= filterWidth/2; ++filter_c) {
       //Find the global image position for this filter position
       //clamp to boundary of the image
-      int image_r = min(max(r + filter_r, 0), static_cast<int>(numRows - 1));
-      int image_c = min(max(c + filter_c, 0), static_cast<int>(numCols - 1));
+      image_c = min(max(c + filter_c, 0), static_cast<int>(numCols - 1));
 
-      float image_value = static_cast<float>(inputChannel[image_r * numCols + image_c]);
-      float filter_value = shared_filter[(filter_r + filterWidth/2) * filterWidth + filter_c + filterWidth/2];
+      image_value = static_cast<float>(inputChannel[image_r * numCols + image_c]);
+      filter_value = filter[(filter_r + filterWidth/2) * filterWidth + filter_c + filterWidth/2];
 
       result += image_value * filter_value;
     }
